@@ -1,0 +1,20 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: dynamo-alerts
+  namespace: monitoring
+  labels:
+     release: prometheus
+spec:
+  groups:
+  - name: dynamo
+    interval: 30s
+    rules:
+    - alert: HighTimeToFirstToken
+      expr: histogram_quantile(0.95, rate(dynamo_frontend_time_to_first_token_seconds_bucket[5m])) > 1.0
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High Time to First Token"
+        description: "95th percentile TTFT is above 1 second"

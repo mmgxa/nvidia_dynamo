@@ -1,0 +1,73 @@
+# This deploys a simple aggregated serving topology with KV-cache routing
+
+# modify from https://docs.nvidia.com/dynamo/dev/recipes/kubernetes-templates/dgd/v-llm
+
+
+apiVersion: nvidia.com/v1beta1
+kind: DynamoGraphDeployment
+metadata:
+  name: vllm-agg-router
+spec:
+  components:
+  - name: Frontend
+    podTemplate:
+      metadata:
+        namespace: dynamo-system
+      spec:
+        containers:
+        - env:
+          - name: DYN_ROUTER_MODE
+            value: kv
+          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.5.0
+          name: main
+    replicas: 1
+    type: frontend
+  - name: worker
+    podTemplate:
+      spec:
+        containers:
+        - args:
+          - --model
+          - Qwen/Qwen2.5-1.5B-Instruct
+          - --kv-events-config
+          - '{"publisher":"zmq","topic":"kv-events","endpoint":"tcp://*:20080","enable_kv_cache_events":true}'
+          command:
+          - python3
+          - -m
+          - dynamo.vllm
+          envFrom:
+          - secretRef:
+              name: hf-token-secret
+          env:
+          - name: DYN_LOGGING_JSONL
+            value: "true" # or 1
+          - name: DYN_LOG
+            value: "info"
+          - name: VLLM_USE_FLASHINFER_SAMPLER
+            value: "0"
+          - name: FLASHINFER_DISABLE
+            value: "1"
+          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.5.0
+          name: main
+          # securityContext:
+          #   capabilities:
+          #     add:
+          #       - IPC_LOCK
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+            requests:
+              # Increase this value for larger models.
+              ephemeral-storage: 2Gi
+          volumeMounts:
+          - name: local-model-cache
+            mountPath: /root/.cache
+          workingDir: /workspace/examples/backends/vllm
+        volumes:
+        - name: local-model-cache
+          hostPath:
+            path: /data/huggingface-cache  # Update with actual cache path
+            type: DirectoryOrCreate
+    replicas: 1
+    # scalingAdapter: {} # ← This creates the DGDSA resource
+    type: worker

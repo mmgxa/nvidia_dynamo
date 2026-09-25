@@ -1,0 +1,85 @@
+# Grafana Alloy configuration: tail Dynamo pod logs (dynamo-system namespace only)
+# and push them to Loki.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alloy
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: alloy
+data:
+  config.alloy: |
+    // Discover every pod in the cluster.
+    discovery.kubernetes "pods" {
+      role = "pod"
+    }
+
+    // Turn discovered pod metadata into Loki stream labels.
+    discovery.relabel "pods" {
+      targets = discovery.kubernetes.pods.targets
+
+      // Only keep pods in the dynamo-system namespace.
+      rule {
+        source_labels = ["__meta_kubernetes_namespace"]
+        regex         = "^dynamo-system$"
+        action        = "keep"
+      }
+
+      rule {
+        source_labels = ["__meta_kubernetes_pod_controller_name"]
+        regex         = "([0-9a-z-.]+?)(-[0-9a-f]{8,10})?"
+        action        = "replace"
+        target_label  = "__tmp_controller_name"
+      }
+
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name", "__meta_kubernetes_pod_label_app", "__tmp_controller_name"]
+        regex         = "^;*([^;]+)(;.*)?$"
+        target_label  = "app"
+      }
+
+      rule {
+        source_labels = ["__meta_kubernetes_namespace"]
+        target_label  = "namespace"
+      }
+
+      rule {
+        source_labels = ["__meta_kubernetes_pod_name"]
+        target_label  = "pod"
+      }
+
+      rule {
+        source_labels = ["__meta_kubernetes_pod_container_name"]
+        target_label  = "container"
+      }
+
+      // Forward NVIDIA Dynamo pod labels (sanitized to underscores) so the
+      // "DynamoGraph Logs" dashboard can filter on them.
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_nvidia_com_dynamo_graph_deployment_name"]
+        target_label  = "nvidia_com_dynamo_graph_deployment_name"
+      }
+
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_nvidia_com_dynamo_component_type"]
+        target_label  = "nvidia_com_dynamo_component_type"
+      }
+
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_nvidia_com_dynamo_component"]
+        target_label  = "nvidia_com_dynamo_component"
+      }
+    }
+
+    // Tail the container logs of the discovered pods.
+    loki.source.kubernetes "pods" {
+      targets    = discovery.relabel.pods.output
+      forward_to = [loki.write.local.receiver]
+    }
+
+    // Ship everything to the Loki gateway in the monitoring namespace.
+    loki.write "local" {
+      endpoint {
+        url = "http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push"
+      }
+    }
